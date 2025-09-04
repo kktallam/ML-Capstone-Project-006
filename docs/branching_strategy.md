@@ -33,6 +33,7 @@ This document describes how our team manages branches, commits, and pull request
    git checkout -b feature/<slug>
 
 2. **Push Changes** from local repo to your target branch:
+   ```bash
    git add .
    git commit -m "Your Commit Message"
    git push origin target-branch-name
