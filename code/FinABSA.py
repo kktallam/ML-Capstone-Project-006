@@ -1,3 +1,5 @@
+import torch
+import flair
 from flair.data import Sentence
 from flair.models import SequenceTagger
 
@@ -10,7 +12,13 @@ class ABSA():
                  NER_tag_list = ['ORG']
                  ):
         
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        flair.device = self.device 
+        print(f"Using device: {self.device}")
+
         self.ABSA = AutoModelForSeq2SeqLM.from_pretrained(ckpt_path)
+        self.ABSA.to(self.device)
+
         self.tokenizer = AutoTokenizer.from_pretrained(ckpt_path)
         self.tagger = SequenceTagger.load('ner')
 
@@ -24,6 +32,7 @@ class ABSA():
     def run_single_absa(self,input_str,tgt):
         input_str = input_str.replace(tgt, '[TGT]')
         input = self.tokenizer(input_str,return_tensors='pt')
+        input = {k: v.to(self.device) for k, v in input.items()}
 
         output = self.ABSA.generate(
                                     **input,
