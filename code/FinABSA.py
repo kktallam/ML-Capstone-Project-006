@@ -12,8 +12,15 @@ class ABSA():
                  NER_tag_list = ['ORG']
                  ):
         
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        flair.device = self.device 
+        # Device detection: prioritize CUDA, then MPS (Apple Silicon), then CPU
+        if torch.cuda.is_available():
+            self.device = torch.device('cuda')
+        elif torch.backends.mps.is_available():
+            self.device = torch.device('mps')
+        else:
+            self.device = torch.device('cpu')
+
+        flair.device = self.device
         print(f"Using device: {self.device}")
 
         self.ABSA = AutoModelForSeq2SeqLM.from_pretrained(ckpt_path)
