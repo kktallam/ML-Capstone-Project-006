@@ -33,29 +33,40 @@ class ABSA():
 
     def run_absa(self,input_str):
         tgt_entities = self.retrieve_target(input_str)
-        output = {e : self.run_single_absa(input_str,e) for e in tgt_entities}
+        output = {}
+        with torch.no_grad():
+            for e in tgt_entities:
+                output[e] = self.run_single_absa(input_str, e)
+                # Clear cache periodically to prevent memory buildup
+                if len(output) % 5 == 0:
+                    self.clear_memory()
         return output
 
     def run_single_absa(self,input_str,tgt):
         input_str = input_str.replace(tgt, '[TGT]')
-        input = self.tokenizer(input_str,return_tensors='pt')
+        # Add truncation to prevent OOM from long sequences
+        input = self.tokenizer(input_str, return_tensors='pt',
+                              truncation=True, max_length=512)
         input = {k: v.to(self.device) for k, v in input.items()}
 
+        # Generate output without gradient tracking
         output = self.ABSA.generate(
                                     **input,
                                     max_length=20,
                                     output_scores=True,
                                     return_dict_in_generate=True
                                     )
-        
+
+        # Extract needed values and move to CPU immediately
         classification_output = self.tokenizer.convert_ids_to_tokens(
-                                                    int(output['sequences'][0][-4])
+                                                    int(output['sequences'][0][-4].cpu())
                                                     )
-        logits = F.softmax(output['scores'][-4][:,-3:],dim=1)[0]
-        
-        return {
+        # Move logits to CPU and convert to Python floats to free GPU memory
+        logits = F.softmax(output['scores'][-4][:,-3:].cpu(),dim=1)[0]
+
+        result = {
                 "classification_output": classification_output,
-                "logits": 
+                "logits":
                 {
                     'positive': float(logits[0]),
                     'negative': float(logits[1]),
@@ -63,8 +74,22 @@ class ABSA():
                 }
         }
 
+        # Explicitly delete large tensors to free GPU memory
+        del output
+        del input
+        del logits
+
+        return result
+
     def retrieve_target(self,input_str):
         sentence = Sentence(input_str)
         self.tagger.predict(sentence)
         entities = [entity.text for entity in sentence.get_spans('ner') if entity.tag in self.NER_tag_list]
         return entities
+
+    def clear_memory(self):
+        """Clear GPU/MPS memory cache to prevent OOM errors during batch processing"""
+        if self.device.type == 'cuda':
+            torch.cuda.empty_cache()
+        elif self.device.type == 'mps':
+            torch.mps.empty_cache()
