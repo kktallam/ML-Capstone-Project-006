@@ -34,12 +34,13 @@ class ABSA():
         input = self.tokenizer(input_str,return_tensors='pt')
         input = {k: v.to(self.device) for k, v in input.items()}
 
-        output = self.ABSA.generate(
-                                    **input,
-                                    max_length=20,
-                                    output_scores=True,
-                                    return_dict_in_generate=True
-                                    )
+        with torch.no_grad():
+            output = self.ABSA.generate(
+                                        **input,
+                                        max_length=20,
+                                        output_scores=True,
+                                        return_dict_in_generate=True
+                                        )
         
         classification_output = self.tokenizer.convert_ids_to_tokens(
                                                     int(output['sequences'][0][-4])
@@ -58,6 +59,7 @@ class ABSA():
 
     def retrieve_target(self,input_str):
         sentence = Sentence(input_str)
-        self.tagger.predict(sentence)
+        with torch.no_grad():
+            self.tagger.predict(sentence)
         entities = [entity.text for entity in sentence.get_spans('ner') if entity.tag in self.NER_tag_list]
         return entities
