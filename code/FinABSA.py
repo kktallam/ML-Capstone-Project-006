@@ -5,34 +5,15 @@ from flair.models import SequenceTagger
 
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 import torch.nn.functional as F
-import logging
-import time
 
 class ABSA():
-    def __init__(self,
+    def __init__(self, 
                  ckpt_path="amphora/FinABSA",
-                 NER_tag_list = ['ORG'],
-                 log_level=logging.INFO
+                 NER_tag_list = ['ORG']
                  ):
-
-        # Setup logging
-        logging.basicConfig(
-            level=log_level,
-            format='%(asctime)s - %(levelname)s - %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
-        )
-        self.logger = logging.getLogger(__name__)
-
-        # Device detection: prioritize CUDA, then MPS (Apple Silicon), then CPU
-        if torch.cuda.is_available():
-            self.device = torch.device('cuda')
-        elif torch.backends.mps.is_available():
-            self.device = torch.device('mps')
-        else:
-            self.device = torch.device('cpu')
-
-        flair.device = self.device
-        self.logger.info(f"Using device: {self.device}")
+        
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        flair.device = self.device 
         print(f"Using device: {self.device}")
 
         self.ABSA = AutoModelForSeq2SeqLM.from_pretrained(ckpt_path)
@@ -44,42 +25,8 @@ class ABSA():
         self.NER_tag_list = NER_tag_list
 
     def run_absa(self,input_str):
-        start_time = time.time()
-
-        # Extract entities
-        entity_start = time.time()
         tgt_entities = self.retrieve_target(input_str)
-        entity_time = time.time() - entity_start
-
-        num_entities = len(tgt_entities)
-        self.logger.info(f"Starting ABSA processing: {num_entities} entities found in {entity_time:.2f}s")
-        self.logger.debug(f"Entities: {tgt_entities}")
-
-        if num_entities == 0:
-            self.logger.warning("No entities found in the input text")
-            return {}
-
-        output = {}
-        with torch.no_grad():
-            for idx, e in enumerate(tgt_entities, 1):
-                entity_start_time = time.time()
-
-                output[e] = self.run_single_absa(input_str, e)
-
-                entity_elapsed = time.time() - entity_start_time
-                self.logger.info(f"[{idx}/{num_entities}] Processed entity '{e}' in {entity_elapsed:.2f}s - "
-                               f"Sentiment: {output[e]['classification_output']}")
-
-                # Clear cache periodically to prevent memory buildup
-                if len(output) % 5 == 0:
-                    self.clear_memory()
-                    self.logger.debug(f"Memory cache cleared after {len(output)} entities")
-
-        total_time = time.time() - start_time
-        avg_time = total_time / num_entities if num_entities > 0 else 0
-        self.logger.info(f"Completed ABSA processing: {num_entities} entities in {total_time:.2f}s "
-                        f"(avg: {avg_time:.2f}s per entity)")
-
+        output = {e : self.run_single_absa(input_str,e) for e in tgt_entities}
         return output
 
     def run_single_absa(self,input_str,tgt):
@@ -97,14 +44,15 @@ class ABSA():
 
         input = {k: v.to(self.device) for k, v in input.items()}
 
-        with torch.no_grad():
-            output = self.ABSA.generate(
-                                        **input,
-                                        max_length=20,
-                                        output_scores=True,
-                                        return_dict_in_generate=True
-                                        )
-        
+        # Generate output without gradient tracking
+        output = self.ABSA.generate(
+                                    **input,
+                                    max_length=20,
+                                    output_scores=True,
+                                    return_dict_in_generate=True
+                                    )
+
+        # Extract needed values and move to CPU immediately
         classification_output = self.tokenizer.convert_ids_to_tokens(
                                                     int(output['sequences'][0][-4].cpu())
                                                     )
