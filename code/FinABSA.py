@@ -8,12 +8,20 @@ import torch.nn.functional as F
 
 class ABSA():
     def __init__(self, 
-                 ckpt_path="amphora/FinABSA",
+                 ckpt_path="amphora/FinABSA-Longer",
                  NER_tag_list = ['ORG']
                  ):
+        print("Initializing FinABSA-Longer model...")
         
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        flair.device = self.device 
+        # Device detection: prioritize CUDA, then MPS (Apple Silicon), then CPU
+        if torch.cuda.is_available():
+            self.device = torch.device('cuda')
+        elif torch.backends.mps.is_available():
+            self.device = torch.device('mps')
+        else:
+            self.device = torch.device('cpu')
+
+        flair.device = self.device
         print(f"Using device: {self.device}")
 
         self.ABSA = AutoModelForSeq2SeqLM.from_pretrained(ckpt_path)
@@ -26,12 +34,20 @@ class ABSA():
 
     def run_absa(self,input_str):
         tgt_entities = self.retrieve_target(input_str)
-        output = {e : self.run_single_absa(input_str,e) for e in tgt_entities}
+        output = {}
+        with torch.no_grad():
+            for e in tgt_entities:
+                output[e] = self.run_single_absa(input_str, e)
+                # Clear cache periodically to prevent memory buildup
+                if len(output) % 5 == 0:
+                    self.clear_memory()
         return output
 
     def run_single_absa(self,input_str,tgt):
         input_str = input_str.replace(tgt, '[TGT]')
-        input = self.tokenizer(input_str,return_tensors='pt')
+        # Add truncation to prevent OOM from long sequences
+        input = self.tokenizer(input_str, return_tensors='pt',
+                              truncation=True, max_length=512)
         input = {k: v.to(self.device) for k, v in input.items()}
 
         with torch.no_grad():
@@ -43,13 +59,14 @@ class ABSA():
                                         )
         
         classification_output = self.tokenizer.convert_ids_to_tokens(
-                                                    int(output['sequences'][0][-4])
+                                                    int(output['sequences'][0][-4].cpu())
                                                     )
-        logits = F.softmax(output['scores'][-4][:,-3:],dim=1)[0]
-        
-        return {
+        #logits = F.softmax(output['scores'][-4][:,-3:],dim=1)[0]
+        logits = F.softmax(output['scores'][-4][:,-3:].cpu(),dim=1)[0]
+
+        result = {
                 "classification_output": classification_output,
-                "logits": 
+                "logits":
                 {
                     'positive': float(logits[0]),
                     'negative': float(logits[1]),
@@ -57,9 +74,23 @@ class ABSA():
                 }
         }
 
+        del output
+        del input
+        del logits
+
+        return result
+
     def retrieve_target(self,input_str):
         sentence = Sentence(input_str)
         with torch.no_grad():
             self.tagger.predict(sentence)
         entities = [entity.text for entity in sentence.get_spans('ner') if entity.tag in self.NER_tag_list]
         return entities
+    
+    def clear_memory(self):
+        """Clear GPU/MPS memory cache to prevent OOM errors during batch processing"""
+        if self.device.type == 'cuda':
+            torch.cuda.empty_cache()
+        elif self.device.type == 'mps':
+            torch.mps.empty_cache()
+    
